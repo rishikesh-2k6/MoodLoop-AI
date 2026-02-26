@@ -1,0 +1,21 @@
+# MoodLoop AI — Dependencies
+# Image compositing (TextOverlay / quote card)
+Pillow>=10.2.0
+
+# Core HTTP / async
+requests>=2.31.0
+
+# Google Trends
+pytrends>=4.9.2
+
+# Data handling
+pandas>=2.1.0
+
+# CLI & config
+python-dotenv>=1.0.0
+
+# Logging
+loguru>=0.7.2
+
+# Typing (stdlib >= 3.10 has this built-in, but explicit for older runtimes)
+typing_extensions>=4.9.0

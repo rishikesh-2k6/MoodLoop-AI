@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# Logs
+logs/*.log
+
+# Output videos (too large for git)
+output/*.mp4
+test_render_out.mp4
+
+# Metadata CSV (generated per-run)
+metadata.csv
+upload_info.csv
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Temp
+*.tmp
