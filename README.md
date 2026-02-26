@@ -157,9 +157,21 @@ Each run produces:
 
 ---
 
+## 🔧 Setup Check
+
+Run the setup checker to verify everything is ready:
+
+```bash
+python setup.py
+```
+
+This verifies Python version, FFmpeg, Ollama, directories, and counts your assets.
+
+---
+
 ## 📄 License
 
-This project is for personal/educational use.
+This project is licensed under the [MIT License](LICENSE).
 
 ---
 
