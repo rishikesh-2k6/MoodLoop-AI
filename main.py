@@ -243,7 +243,14 @@ def step_render_video(
 
     logger.info("[Step 4] Starting video render (run_id=%s)…", run_id)
     try:
-        font_path = Path(args.font_path) if args.font_path else None
+        # CLI --font-path overrides the theme-selected font
+        if args.font_path:
+            font_path = Path(args.font_path)
+        elif assets.font_path:
+            font_path = assets.font_path
+        else:
+            font_path = None
+
         renderer = VideoRenderer(
             output_dir=OUTPUT_DIR,
             quote_font_path=font_path,

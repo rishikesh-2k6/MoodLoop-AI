@@ -40,6 +40,10 @@ class Theme:
         Lowercase terms that link this theme to trending topics.
     mood : str
         Emotional tone descriptor forwarded to the LLM.
+    music_keywords : tuple[str, ...]
+        Lowercase terms used to match audio files by filename.
+    font_file : str
+        Filename of the preferred font in ``assets/fonts/``.
     base_weight : float
         Default sampling weight (before trend boosting).
     """
@@ -48,6 +52,8 @@ class Theme:
     display_name: str
     keywords: tuple[str, ...]
     mood: str
+    music_keywords: tuple[str, ...] = ()
+    font_file: str = "PlayfairDisplay-Bold.ttf"
     base_weight: float = 1.0
 
 
@@ -69,6 +75,7 @@ class SelectedAssets:
     theme: Theme
     background_path: Optional[Path] = field(default=None)
     music_path: Optional[Path] = field(default=None)
+    font_path: Optional[Path] = field(default=None)
 
     def is_complete(self) -> bool:
         """Return ``True`` only when both a background and music are resolved."""
@@ -105,42 +112,56 @@ class ThemeSelector:
             display_name="Dark Aesthetic",
             keywords=("dark aesthetic", "dark", "gothic", "shadow", "night"),
             mood="mysterious and introspective",
+            music_keywords=("dark", "ambient", "electronic", "cinematic", "atmospheric"),
+            font_file="Cinzel-Bold.ttf",          # gothic, elegant serif
         ),
         Theme(
             name="genz_existential",
             display_name="Gen Z Existential",
             keywords=("gen z", "existential", "nihilism", "purpose", "meaning"),
             mood="detached yet searching",
+            music_keywords=("lofi", "chill", "ambient", "piano", "aesthetic"),
+            font_file="Poppins-Bold.ttf",          # clean, modern sans
         ),
         Theme(
             name="late_night_thoughts",
             display_name="Late Night Thoughts",
             keywords=("night thoughts", "3am", "overthinking", "insomnia", "alone"),
             mood="raw and vulnerable",
+            music_keywords=("piano", "calm", "ambient", "dark", "soft"),
+            font_file="Caveat-Bold.ttf",           # handwritten, personal
         ),
         Theme(
             name="lofi_nostalgia",
             display_name="Lo-Fi Nostalgia",
             keywords=("lofi", "nostalgia", "retro", "chill", "vintage aesthetic"),
             mood="warm and wistful",
+            music_keywords=("lofi", "piano", "calm", "chill", "bread", "lukrembo"),
+            font_file="Merriweather-Bold.ttf",     # warm, readable serif
         ),
         Theme(
             name="sad_banger",
             display_name="Sad Banger",
             keywords=("sad", "heartbreak", "emotional", "cry", "sad lyrics"),
             mood="deeply emotional and melancholic",
+            music_keywords=("dark", "piano", "sad", "ambient", "emotional"),
+            font_file="GreatVibes-Regular.ttf",    # flowing script, emotional
         ),
         Theme(
             name="motivational_chaos",
             display_name="Motivational Chaos",
             keywords=("motivational", "hustle", "grind", "success", "ambition"),
             mood="electric and unapologetic",
+            music_keywords=("electronic", "dark", "ambient", "frost", "cinematic"),
+            font_file="Oswald-Bold.ttf",           # bold, impactful condensed
         ),
         Theme(
             name="chill_vibes",
             display_name="Chill Vibes",
             keywords=("chill", "relax", "calm", "peace", "aesthetic vibes"),
             mood="serene and grounded",
+            music_keywords=("lofi", "calm", "chill", "piano", "bread", "lukrembo"),
+            font_file="Lato-Bold.ttf",             # soft, clean, friendly
         ),
     )
 
@@ -194,19 +215,22 @@ class ThemeSelector:
         """
         theme = self._pick_theme(trending_topics or [])
         background = self._pick_asset(self.backgrounds_dir, self.IMAGE_EXTENSIONS)
-        music = self._pick_asset(self.music_dir, self.AUDIO_EXTENSIONS)
+        music = self._pick_music(theme)
+        font = self._resolve_font(theme)
 
         assets = SelectedAssets(
             theme=theme,
             background_path=background,
             music_path=music,
+            font_path=font,
         )
 
         logger.info(
-            "Selected theme=%r | bg=%s | music=%s",
+            "Selected theme=%r | bg=%s | music=%s | font=%s",
             theme.name,
             background.name if background else "NONE",
             music.name if music else "NONE",
+            font.name if font else "DEFAULT",
         )
         return assets
 
@@ -278,6 +302,96 @@ class ThemeSelector:
             return None
 
         return self._rng.choice(candidates)
+
+    def _pick_music(self, theme: Theme) -> Optional[Path]:
+        """
+        Pick the most mood-appropriate music file for *theme*.
+
+        Scores each audio file by counting how many of the theme's
+        ``music_keywords`` appear in its filename (case-insensitive).
+        The highest-scoring file is chosen; ties are broken randomly.
+        Falls back to a random pick if no keywords match.
+
+        Parameters
+        ----------
+        theme : Theme
+            The selected theme with ``music_keywords``.
+
+        Returns
+        -------
+        Path | None
+            Path to the best-matching audio file.
+        """
+        candidates = [
+            f
+            for f in self.music_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in self.AUDIO_EXTENSIONS
+        ]
+
+        if not candidates:
+            logger.warning(
+                "No eligible audio found in %s", self.music_dir
+            )
+            return None
+
+        if not theme.music_keywords:
+            return self._rng.choice(candidates)
+
+        # Score each file by keyword matches in filename
+        scored: list[tuple[int, Path]] = []
+        for f in candidates:
+            name_lower = f.stem.lower()
+            score = sum(1 for kw in theme.music_keywords if kw in name_lower)
+            scored.append((score, f))
+
+        max_score = max(s for s, _ in scored)
+        if max_score == 0:
+            # No keyword matches — fall back to random
+            chosen = self._rng.choice(candidates)
+            logger.debug("No music keyword match for theme=%r — random pick: %s", theme.name, chosen.name)
+            return chosen
+
+        # Pick randomly among the top-scoring files
+        best = [f for s, f in scored if s == max_score]
+        chosen = self._rng.choice(best)
+        logger.info(
+            "Music matched for theme=%r (score=%d/%d): %s",
+            theme.name, max_score, len(theme.music_keywords), chosen.name,
+        )
+        return chosen
+
+    def _resolve_font(self, theme: Theme) -> Optional[Path]:
+        """
+        Resolve the theme's preferred font file to an absolute path.
+
+        Searches ``assets/fonts/`` (and subdirectories) for a file matching
+        ``theme.font_file``.  Returns ``None`` if not found.
+
+        Parameters
+        ----------
+        theme : Theme
+            The selected theme with ``font_file`` filename.
+
+        Returns
+        -------
+        Path | None
+            Absolute path to the font file, or ``None``.
+        """
+        fonts_dir = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+        if not fonts_dir.exists():
+            logger.warning("Fonts directory not found: %s", fonts_dir)
+            return None
+
+        # Search flat and one level deep (for font family subfolders)
+        for candidate in fonts_dir.rglob(theme.font_file):
+            logger.info("Font resolved for theme=%r: %s", theme.name, candidate.name)
+            return candidate
+
+        logger.warning(
+            "Font '%s' not found for theme=%r — TextOverlay will use default.",
+            theme.font_file, theme.name,
+        )
+        return None
 
     def _validate_dirs(self) -> None:
         """Warn (don't crash) when asset directories are missing."""

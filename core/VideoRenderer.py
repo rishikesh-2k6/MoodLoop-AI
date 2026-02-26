@@ -39,8 +39,8 @@ _DURATION_SEC = 30
 _FADE_SEC = 1.0       # length of fade-in / fade-out in seconds
 _VIDEO_CODEC = "libx264"
 _AUDIO_CODEC = "aac"
-_AUDIO_BITRATE = "192k"
-_CRF = 23              # constant rate factor (lower = better quality)
+_AUDIO_BITRATE = "256k"
+_CRF = 18              # constant rate factor (lower = better quality, 18 ≈ visually lossless)
 _PRESET = "medium"     # FFmpeg preset (ultrafast → veryslow)
 
 

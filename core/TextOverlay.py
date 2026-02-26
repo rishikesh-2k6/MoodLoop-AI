@@ -278,9 +278,24 @@ class TextOverlay:
             else:
                 logger.warning("Font path not found: %s — using default.", font_path)
 
+        # Try bundled Playfair Display first (premium editorial serif)
+        _FONTS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
+        _BUNDLED_FONT = _FONTS_DIR / "PlayfairDisplay.ttf"
+        for candidate in [_BUNDLED_FONT]:
+            if candidate.exists():
+                try:
+                    return ImageFont.truetype(str(candidate), size=size)
+                except OSError as exc:
+                    logger.warning("Could not load bundled font %s: %s", candidate, exc)
+
         try:
-            # Try Georgia Bold for a premium serif look
+            # Try Georgia Bold as system fallback
             return ImageFont.truetype("georgiab.ttf", size=size)
+        except OSError:
+            pass
+
+        try:
+            return ImageFont.truetype("arial.ttf", size=size)
         except OSError:
             pass
 
