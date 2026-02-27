@@ -239,6 +239,32 @@ class VideoRenderer:
         """
         fade_out_start = self.duration_sec - self.fade_sec
 
+        # --- Dynamic Audio Slicing ---
+        # Instead of always taking the first 30s (which is often a quiet intro),
+        # we probe the audio length and pick a random slice from the "meat" of the track.
+        audio_offset = 0
+        try:
+            # Probe audio duration using ffmpeg directly (ffprobe might not be installed standalone)
+            probe_cmd = [
+                self.ffmpeg_path, "-i", str(audio_path), "-f", "null", "-"
+            ]
+            res = subprocess.run(probe_cmd, capture_output=True, text=True)
+            import re, random
+            m = re.search(r"Duration: (\d{2}):(\d{2}):(\d{2}\.\d+)", res.stderr)
+            if m:
+                h, m_mins, s = m.groups()
+                total_sec = int(h) * 3600 + int(m_mins) * 60 + float(s)
+                
+                # If song is long enough, skip the first 15% (intro) and last 15% (outro)
+                if total_sec > self.duration_sec + 20:
+                    min_start = total_sec * 0.15
+                    max_start = total_sec * 0.85 - self.duration_sec
+                    if max_start > min_start:
+                        audio_offset = random.uniform(min_start, max_start)
+                        logger.debug("[VideoRenderer] Slicing audio at offset %.1fs / %.1fs", audio_offset, total_sec)
+        except Exception as exc:
+            logger.debug("[VideoRenderer] Audio probe failed (%s), defaulting to start of track.", exc)
+
         vf = (
             f"scale={_WIDTH}:{_HEIGHT}:force_original_aspect_ratio=decrease,"
             f"pad={_WIDTH}:{_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black,"
@@ -256,6 +282,13 @@ class VideoRenderer:
             "-y",                             # overwrite without prompt
             "-loop", "1",                     # loop still image
             "-i", str(frame_path),            # input 0: image
+        ]
+        
+        # Apply the audio offset if we mapped one
+        if audio_offset > 0:
+            cmd.extend(["-ss", f"{audio_offset:.3f}"])
+            
+        cmd.extend([
             "-i", str(audio_path),            # input 1: audio
             "-t", str(self.duration_sec),     # stop after N seconds
             "-vf", vf,                        # video filter chain
@@ -271,7 +304,7 @@ class VideoRenderer:
             "-shortest",                      # stop when shortest stream ends
             "-movflags", "+faststart",        # web-optimised atom placement
             str(output_path),
-        ]
+        ])
 
         logger.debug("[VideoRenderer] FFmpeg command:\n  %s", " ".join(cmd))
 
