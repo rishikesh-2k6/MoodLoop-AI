@@ -193,8 +193,12 @@ Write as if the person reading it is alone at 1:37 AM.
         import re
         
         # We try to get the JSON back
+        # User request: Gemini first, if it fails -> Llama
+        route = ["gemini", "ollama"]
         for attempt in range(2):
-            text, backend = self._generate_with_fallback(prompt, label="content_json")
+            text, backend = self._generate_with_fallback(
+                prompt, label="content_json", route=route
+            )
             
             # Use regex to find the outermost JSON object
             match = re.search(r'\{.*\}', text, re.DOTALL)
@@ -253,9 +257,11 @@ Write as if the person reading it is alone at 1:37 AM.
             "more emotionally resonant 1-sentence hook.\n\n"
             "Output ONLY the final quote. No quotes or introductory text."
         )
-        logger.info("GeminiEngine: Beginning AI peer-review and improvisation…")
+        logger.info("GeminiEngine: Beginning AI peer-review and improvisation via HuggingFace…")
         try:
-            new_quote, backend = self._generate_with_fallback(prompt, label="improvise")
+            # User request: Use huggingface models for validating and improving the output
+            route = ["huggingface"]
+            new_quote, backend = self._generate_with_fallback(prompt, label="improvise", route=route)
             new_quote = new_quote.strip().strip('"').strip("'").splitlines()[0].strip()
             if new_quote.lower() != content.quote.lower():
                 logger.info("Peer-Review upgraded quote from '%s' to '%s'", content.quote, new_quote)
@@ -477,51 +483,54 @@ Write as if the person reading it is alone at 1:37 AM.
     # ------------------------------------------------------------------ #
 
     def _generate_with_fallback(
-        self, prompt: str, label: str = "content", _dry: bool = False
+        self, prompt: str, label: str = "content", _dry: bool = False, route: Optional[list[str]] = None
     ) -> tuple[str, str]:
         """
-        Try Gemini → Ollama → HuggingFace in order.
+        Follows the specified fallback route list.
+        Available route engines: 'gemini', 'huggingface', 'ollama'.
+        Default route if none provided: ['gemini', 'huggingface', 'ollama'].
 
         Returns (text, backend_name).
         """
+        route = route or ["gemini", "huggingface", "ollama"]
+
         if _dry:
             # Just return which backend would be used (for logging)
-            if self.gemini_api_key:
-                return ("", "gemini-1.5-flash")
-            return ("", "huggingface")
+            return ("", route[0] if route else "unknown")
 
-        # ── Tier 1: Gemini ──────────────────────────────────────────── #
-        if self.gemini_api_key:
-            try:
-                text = self._gemini_generate(prompt)
-                if text:
-                    logger.debug("[%s] Gemini OK", label)
-                    return text, "gemini-1.5-flash"
-            except Exception as exc:
-                logger.warning("[%s] Gemini failed (%s) — trying HuggingFace", label, exc)
+        for engine in route:
+            # ── Tier 1: Gemini ──────────────────────────────────────────── #
+            if engine == "gemini" and self.gemini_api_key:
+                try:
+                    text = self._gemini_generate(prompt)
+                    if text:
+                        logger.debug("[%s] Gemini OK", label)
+                        return text, "gemini-1.5-flash"
+                except Exception as exc:
+                    logger.warning("[%s] Gemini failed (%s)", label, exc)
 
-        # ── Tier 2: HuggingFace free online API ─────────────────────── #
-        try:
-            text = self._hf_generate(prompt)
-            if text:
-                logger.debug("[%s] HuggingFace OK", label)
-                return text, "huggingface"
-        except Exception as exc:
-            logger.warning("[%s] HuggingFace failed (%s) — trying Ollama", label, exc)
+            # ── Tier 2: HuggingFace free online API ─────────────────────── #
+            elif engine == "huggingface":
+                try:
+                    text = self._hf_generate(prompt)
+                    if text:
+                        logger.debug("[%s] HuggingFace OK", label)
+                        return text, "huggingface"
+                except Exception as exc:
+                    logger.warning("[%s] HuggingFace failed (%s)", label, exc)
 
-        # ── Tier 3: Ollama (local llama) — last resort ───────────────── #
-        if self._ollama_alive():
-            try:
-                text = self._ollama_generate(prompt)
-                if text:
-                    logger.debug("[%s] Ollama OK", label)
-                    return text, f"ollama/{self.ollama_model}"
-            except Exception as exc:
-                logger.error("[%s] Ollama also failed: %s", label, exc)
+            # ── Tier 3: Ollama (local llama) — last resort ───────────────── #
+            elif engine == "ollama" and self._ollama_alive():
+                try:
+                    text = self._ollama_generate(prompt)
+                    if text:
+                        logger.debug("[%s] Ollama OK", label)
+                        return text, f"ollama/{self.ollama_model}"
+                except Exception as exc:
+                    logger.error("[%s] Ollama also failed: %s", label, exc)
 
         raise RuntimeError(
-            f"GeminiEngine: all backends failed for '{label}'. "
-            "Check API key, internet connection, and Ollama status."
+            f"GeminiEngine: all designated backends {route} failed for '{label}'."
         )
 
     def _gemini_generate(self, prompt: str) -> str:
