@@ -138,6 +138,46 @@ class GeminiEngine:
             theme_name=theme_name, model=backend,
         )
 
+    def improvise_output(
+        self,
+        content: GeneratedContent,
+        image_name: str,
+        font_name: str,
+        music_name: str,
+    ) -> GeneratedContent:
+        """
+        AI Peer-Review: Sends the initial quote and chosen assets back to the AI
+        to see if the text can be improved or "remixed" to fit the actual visuals and audio better.
+        """
+        prompt = (
+            f"You are a peer-reviewing AI Director.\n"
+            f"We generated a draft quote: \"{content.quote}\"\n"
+            f"For visual context, we selected this background image: {image_name}\n"
+            f"We selected this font: {font_name}\n"
+            f"And this music track: {music_name}\n\n"
+            "Task: Improve the quote so it perfectly matches the vibe of the chosen image and music.\n"
+            "If the original is already perfect, you can return it. Otherwise, write a punchier, "
+            "more emotionally resonant 1-sentence hook.\n\n"
+            "Output ONLY the final quote. No quotes or introductory text."
+        )
+        logger.info("GeminiEngine: Beginning AI peer-review and improvisation…")
+        try:
+            new_quote, backend = self._generate_with_fallback(prompt, label="improvise")
+            new_quote = new_quote.strip().strip('"').strip("'").splitlines()[0].strip()
+            if new_quote.lower() != content.quote.lower():
+                logger.info("Peer-Review upgraded quote from '%s' to '%s'", content.quote, new_quote)
+                content.quote = new_quote
+                # If quote changed, title and caption need slight tweaks to match
+                content.title = self.generate_title(content.theme_name, new_quote)
+                content.caption = self.generate_caption(content.theme_name, new_quote, content.title)
+                content.model = f"peer-reviewed by {backend}"
+            else:
+                logger.info("Peer-Review approved original quote without changes.")
+        except Exception as exc:
+            logger.warning("Peer-Review failed (%s). Keeping original content.", exc)
+
+        return content
+
     def generate_quote(self, theme_name: str, mood: str) -> str:
         """
         Generate one short, punchy hook quote.

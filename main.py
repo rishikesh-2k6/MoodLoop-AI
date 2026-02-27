@@ -26,10 +26,11 @@ Pipeline stages
   2. Theme + background/music asset selection
   3. Gemini AI content generation (quote, title, caption)
   4. Gemini AI asset refinement (best image, font, music)
-  5. Video rendering via FFmpeg + Pillow quote overlay
-  6. Gemini Vision frame validation
-  7. CSV metadata logging
-  8. Human-readable summary
+  5. AI Peer-Review (Gemini/fallback improvises quote to match assets)
+  6. Video rendering via FFmpeg + Pillow quote overlay
+  7. Gemini Vision frame validation
+  8. CSV metadata logging
+  9. Human-readable summary
 """
 
 from __future__ import annotations
@@ -243,6 +244,7 @@ def step_refine_assets(
     )
     mood = assets.theme.mood
     quote = content.quote
+    logger.info("[Step 4] Asking Gemini to pick the best assets for quote: %r", quote)
 
     # ── Best background image ────────────────────────────────────────
     try:
@@ -294,6 +296,40 @@ def step_refine_assets(
     return assets
 
 
+def step_peer_review(
+    assets: SelectedAssets,
+    content: GeneratedContent,
+    args: argparse.Namespace,
+) -> GeneratedContent:
+    """
+    Step 5 — AI Peer-Review (Improvise Output).
+    
+    Now that we know exactly which image, font, and music we are using, 
+    we send the quote back to the AI to see if it can be improved or remixed 
+    to perfectly match the final visuals and audio.
+    """
+    if not assets.is_complete():
+        return content  # skip if missing assets
+
+    logger.info("[Step 5] AI Peer-Review (improvising output to fit selected assets)…")
+    engine = GeminiEngine(
+        ollama_url=args.ollama_url,
+        ollama_model=args.model,
+    )
+    
+    image_name = assets.background_path.name if assets.background_path else "unknown"
+    font_name = assets.font_path.stem if assets.font_path else "unknown"
+    music_name = assets.music_path.name if assets.music_path else "unknown"
+    
+    revised_content = engine.improvise_output(
+        content,
+        image_name=image_name,
+        font_name=font_name,
+        music_name=music_name,
+    )
+    return revised_content
+
+
 def step_render_video(
     run_id: str,
     assets: SelectedAssets,
@@ -301,7 +337,7 @@ def step_render_video(
     args: argparse.Namespace,
 ) -> Optional["RenderResult"]:
     """
-    Step 5 — Render a 30-second vertical video via FFmpeg.
+    Step 6 — Render a 30-second vertical video via FFmpeg.
 
     Parameters
     ----------
@@ -320,17 +356,17 @@ def step_render_video(
         Render result object, or ``None`` if rendering was skipped.
     """
     if args.no_render:
-        logger.info("[Step 5] Video rendering skipped (--no-render).")
+        logger.info("[Step 6] Video rendering skipped (--no-render).")
         return None
 
     if not assets.is_complete():
         logger.warning(
-            "[Step 5] Skipping render — missing background or music. "
+            "[Step 6] Skipping render — missing background or music. "
             "Add files to assets/backgrounds/ and assets/music/."
         )
         return None
 
-    logger.info("[Step 5] Starting video render (run_id=%s)…", run_id)
+    logger.info("[Step 6] Starting video render (run_id=%s) with dynamic audio slicing…", run_id)
     try:
         # CLI --font-path overrides AI-selected font
         if args.font_path:
@@ -370,7 +406,7 @@ def step_validate_frame(
     args: argparse.Namespace,
 ) -> None:
     """
-    Step 6 — Use Gemini Vision to validate the rendered frame.
+    Step 7 — Use Gemini Vision to validate the rendered frame.
 
     Checks readability and mood match; logs warnings if issues found.
     Skipped if rendering was skipped or failed.
@@ -378,7 +414,7 @@ def step_validate_frame(
     if not render_result or not render_result.success:
         return
 
-    logger.info("[Step 6] Validating rendered frame with Gemini Vision…")
+    logger.info("[Step 7] Validating rendered frame with Gemini Vision…")
     try:
         engine = GeminiEngine(
             ollama_url=args.ollama_url,
@@ -591,16 +627,19 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # Stage 4 ── AI asset refinement (Gemini picks best image/font/music)
     assets = step_refine_assets(assets, content, args)
 
-    # Stage 5 ── Video rendering
+    # Stage 5 ── AI Peer-Review (Improvise text to perfectly fit assets)
+    content = step_peer_review(assets, content, args)
+
+    # Stage 6 ── Video rendering (with dynamic audio slicing)
     render_result = step_render_video(run_id, assets, content, args)
 
-    # Stage 6 ── Gemini Vision frame validation
+    # Stage 7 ── Gemini Vision frame validation
     step_validate_frame(render_result, content, args)
 
-    # Stage 7 ── Metadata logging
+    # Stage 8 ── Metadata logging
     step_log_metadata(run_id, assets, content, trending_topics, render_result)
 
-    # Stage 8 ── Summary
+    # Stage 9 ── Summary
     print_run_summary(run_id, assets, content, render_result)
 
     logger.info("═══ Pipeline complete (run_id=%s) ═══", run_id)
