@@ -61,6 +61,7 @@ from core.ThemeSelector import ThemeSelector, SelectedAssets
 from core.GeminiEngine import GeminiEngine, GeneratedContent
 from core.LLMEngine import GeneratedContent  # type: ignore[no-redef, assignment]
 from core.VideoRenderer import VideoRenderer, RenderResult
+import generate_upload_csv
 
 # ------------------------------------------------------------------ #
 #  Logging configuration                                               #
@@ -641,6 +642,13 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     # Stage 9 ── Summary
     print_run_summary(run_id, assets, content, render_result)
+
+    # Stage 10 ── Generate upload_info.csv
+    try:
+        logger.info("Generating upload_info.csv...")
+        generate_upload_csv.generate()
+    except Exception as exc:
+        logger.warning("Failed to generate upload_info.csv: %s", exc)
 
     logger.info("═══ Pipeline complete (run_id=%s) ═══", run_id)
 
