@@ -2,6 +2,9 @@
 # Image compositing (TextOverlay / quote card)
 Pillow>=10.2.0
 
+# Google Gemini AI (primary content engine)
+google-generativeai>=0.8.0
+
 # Core HTTP / async
 requests>=2.31.0
 

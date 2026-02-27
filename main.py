@@ -15,14 +15,21 @@ Optional flags (all have defaults):
     --font-path    Path to a .ttf font for quote overlay
     --seed         Integer seed for reproducibility
 
+AI backends (priority order):
+    1. Google Gemini  (set GEMINI_API_KEY in .env)
+    2. Ollama         (local, llama3)
+    3. HuggingFace    (free online API, no key needed)
+
 Pipeline stages
 ───────────────
   1. Google Trends analysis (optional)
   2. Theme + background/music asset selection
-  3. LLM content generation via Ollama / llama3
-  4. Video rendering via FFmpeg + Pillow quote overlay
-  5. CSV metadata logging
-  6. Human-readable summary
+  3. Gemini AI content generation (quote, title, caption)
+  4. Gemini AI asset refinement (best image, font, music)
+  5. Video rendering via FFmpeg + Pillow quote overlay
+  6. Gemini Vision frame validation
+  7. CSV metadata logging
+  8. Human-readable summary
 """
 
 from __future__ import annotations
@@ -41,9 +48,17 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# ── Load .env if present ─────────────────────────────────────────── #
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass  # python-dotenv not installed — API key must be set in env
+
 from core.TrendAnalyzer import TrendAnalyzer
 from core.ThemeSelector import ThemeSelector, SelectedAssets
-from core.LLMEngine import LLMEngine, GeneratedContent
+from core.GeminiEngine import GeminiEngine, GeneratedContent
+from core.LLMEngine import GeneratedContent  # type: ignore[no-redef, assignment]
 from core.VideoRenderer import VideoRenderer, RenderResult
 
 # ------------------------------------------------------------------ #
@@ -165,44 +180,118 @@ def step_generate_content(
     assets: SelectedAssets, args: argparse.Namespace
 ) -> GeneratedContent:
     """
-    Step 3 — Call Ollama (llama3) to generate quote, title, and caption.
+    Step 3 — Generate quote, title, and caption via Gemini AI
+    (with automatic fallback to Ollama and HuggingFace).
 
     Parameters
     ----------
     assets : SelectedAssets
         Theme metadata used to craft prompts.
     args : argparse.Namespace
-        CLI args carrying model and Ollama URL.
+        CLI args (ollama URL, model, etc.)
 
     Returns
     -------
     GeneratedContent
-        All LLM-generated text fields.
-
-    Raises
-    ------
-    SystemExit
-        If Ollama is unreachable after health check.
+        All AI-generated text fields.
     """
-    logger.info("[Step 3] Initialising LLM engine (model=%s)…", args.model)
-    engine = LLMEngine(
-        base_url=args.ollama_url,
-        model=args.model,
+    logger.info("[Step 3] Initialising AI engine (Gemini → Ollama → HuggingFace)…")
+    engine = GeminiEngine(
+        ollama_url=args.ollama_url,
+        ollama_model=args.model,
     )
-
-    if not engine.health_check():
-        logger.error(
-            "[Step 3] Cannot reach Ollama at %s. "
-            "Start it with: ollama serve",
-            args.ollama_url,
-        )
-        sys.exit(1)
-
     content = engine.generate_all(
         theme_name=assets.theme.display_name,
         mood=assets.theme.mood,
     )
+    logger.info(
+        "[Step 3] Quote generated via %s: %r",
+        content.model, content.quote
+    )
     return content
+
+
+def step_refine_assets(
+    assets: SelectedAssets,
+    content: GeneratedContent,
+    args: argparse.Namespace,
+) -> SelectedAssets:
+    """
+    Step 4 — Use Gemini to pick the best image, font, and music
+    for this specific quote and mood.
+
+    Falls back to the ThemeSelector's original choices if Gemini
+    is unavailable.
+
+    Parameters
+    ----------
+    assets : SelectedAssets
+        Initial asset selection from ThemeSelector.
+    content : GeneratedContent
+        Generated quote/title (used for AI matching).
+    args : argparse.Namespace
+        CLI args.
+
+    Returns
+    -------
+    SelectedAssets
+        Updated assets with Gemini-selected image/font/music.
+    """
+    engine = GeminiEngine(
+        ollama_url=args.ollama_url,
+        ollama_model=args.model,
+    )
+    mood = assets.theme.mood
+    quote = content.quote
+
+    # ── Best background image ────────────────────────────────────────
+    try:
+        image_candidates = [
+            p for p in BACKGROUNDS_DIR.iterdir()
+            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        ]
+        if image_candidates:
+            best_bg = engine.pick_best_image(quote, mood, image_candidates)
+            if best_bg and best_bg != assets.background_path:
+                logger.info("[Step 4] Gemini picked image: %s", best_bg.name)
+                assets.background_path = best_bg
+    except Exception as exc:
+        logger.warning("[Step 4] Image selection failed: %s", exc)
+
+    # ── Best font ────────────────────────────────────────────────────
+    if not args.font_path:  # only if user hasn't forced a font via CLI
+        try:
+            fonts_dir = ROOT / "assets" / "fonts"
+            font_candidates = list(fonts_dir.rglob("*.ttf"))[:25]  # cap to avoid huge requests
+            if font_candidates:
+                best_font = engine.pick_best_font(
+                    quote, mood, font_candidates,
+                    theme_font=assets.font_path,
+                )
+                if best_font:
+                    logger.info("[Step 4] Gemini picked font: %s", best_font.name)
+                    assets.font_path = best_font
+        except Exception as exc:
+            logger.warning("[Step 4] Font selection failed: %s", exc)
+
+    # ── Best music ───────────────────────────────────────────────────
+    try:
+        music_candidates = [
+            p for p in MUSIC_DIR.iterdir()
+            if p.is_file() and p.suffix.lower() in {".mp3", ".wav", ".aac", ".flac", ".m4a"}
+        ]
+        if music_candidates:
+            best_music = engine.pick_best_music(
+                mood, music_candidates,
+                theme_music=assets.music_path,
+            )
+            if best_music and best_music != assets.music_path:
+                logger.info("[Step 4] Gemini picked music: %s", best_music.name)
+                assets.music_path = best_music
+    except Exception as exc:
+        logger.warning("[Step 4] Music selection failed: %s", exc)
+
+    return assets
 
 
 def step_render_video(
@@ -212,7 +301,7 @@ def step_render_video(
     args: argparse.Namespace,
 ) -> Optional["RenderResult"]:
     """
-    Step 4 — Render a 30-second vertical video via FFmpeg.
+    Step 5 — Render a 30-second vertical video via FFmpeg.
 
     Parameters
     ----------
@@ -221,9 +310,9 @@ def step_render_video(
     assets : SelectedAssets
         Resolved background + music file paths.
     content : GeneratedContent
-        LLM-generated text (quote, title).
+        AI-generated text (quote, title).
     args : argparse.Namespace
-        CLI args (no-render flag, font path, ffmpeg path).
+        CLI args (no-render flag, font path).
 
     Returns
     -------
@@ -231,19 +320,19 @@ def step_render_video(
         Render result object, or ``None`` if rendering was skipped.
     """
     if args.no_render:
-        logger.info("[Step 4] Video rendering skipped (--no-render).")
+        logger.info("[Step 5] Video rendering skipped (--no-render).")
         return None
 
     if not assets.is_complete():
         logger.warning(
-            "[Step 4] Skipping render — missing background or music. "
+            "[Step 5] Skipping render — missing background or music. "
             "Add files to assets/backgrounds/ and assets/music/."
         )
         return None
 
-    logger.info("[Step 4] Starting video render (run_id=%s)…", run_id)
+    logger.info("[Step 5] Starting video render (run_id=%s)…", run_id)
     try:
-        # CLI --font-path overrides the theme-selected font
+        # CLI --font-path overrides AI-selected font
         if args.font_path:
             font_path = Path(args.font_path)
         elif assets.font_path:
@@ -263,16 +352,58 @@ def step_render_video(
             title=content.title,
         )
         if result.success:
-            logger.info("[Step 4] ✓ Video ready → %s", result.output_path)
+            logger.info("[Step 5] ✓ Video ready → %s", result.output_path)
         else:
-            logger.error("[Step 4] Render failed: %s", result.error_message)
+            logger.error("[Step 5] Render failed: %s", result.error_message)
         return result
     except EnvironmentError as exc:
-        logger.error("[Step 4] %s", exc)
+        logger.error("[Step 5] %s", exc)
         return None
     except Exception as exc:  # noqa: BLE001
-        logger.error("[Step 4] Unexpected render error: %s", exc)
+        logger.error("[Step 5] Unexpected render error: %s", exc)
         return None
+
+
+def step_validate_frame(
+    render_result: Optional["RenderResult"],
+    content: GeneratedContent,
+    args: argparse.Namespace,
+) -> None:
+    """
+    Step 6 — Use Gemini Vision to validate the rendered frame.
+
+    Checks readability and mood match; logs warnings if issues found.
+    Skipped if rendering was skipped or failed.
+    """
+    if not render_result or not render_result.success:
+        return
+
+    logger.info("[Step 6] Validating rendered frame with Gemini Vision…")
+    try:
+        engine = GeminiEngine(
+            ollama_url=args.ollama_url,
+            ollama_model=args.model,
+        )
+        # Find the frame PNG (TextOverlay saves it to a temp path; use the video as proxy)
+        frame_candidates = list(OUTPUT_DIR.glob(f"{render_result.output_path.stem}*.png"))
+        frame_path = frame_candidates[0] if frame_candidates else None
+
+        if not frame_path:
+            logger.info("[Step 6] No frame PNG found — skipping vision validation")
+            return
+
+        validation = engine.validate_frame(frame_path, content.quote)
+        if validation["ok"]:
+            logger.info(
+                "[Step 6] ✓ Frame validation passed — %s", validation["feedback"]
+            )
+        else:
+            logger.warning(
+                "[Step 6] ⚠ Frame validation issue — readable=%s mood_match=%s — %s",
+                validation["readable"], validation["mood_match"], validation["feedback"]
+            )
+    except Exception as exc:
+        logger.warning("[Step 6] Frame validation skipped: %s", exc)
 
 
 def step_log_metadata(
@@ -451,19 +582,25 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # Stage 1 ── Trend analysis
     trending_topics = step_fetch_trends(args)
 
-    # Stage 2 ── Theme + asset selection
+    # Stage 2 ── Theme + initial asset selection
     assets = step_select_theme(trending_topics, seed=args.seed)
 
-    # Stage 3 ── LLM content generation
+    # Stage 3 ── AI content generation (Gemini → Ollama → HuggingFace)
     content = step_generate_content(assets, args)
 
-    # Stage 4 ── Video rendering
+    # Stage 4 ── AI asset refinement (Gemini picks best image/font/music)
+    assets = step_refine_assets(assets, content, args)
+
+    # Stage 5 ── Video rendering
     render_result = step_render_video(run_id, assets, content, args)
 
-    # Stage 5 ── Metadata logging
+    # Stage 6 ── Gemini Vision frame validation
+    step_validate_frame(render_result, content, args)
+
+    # Stage 7 ── Metadata logging
     step_log_metadata(run_id, assets, content, trending_topics, render_result)
 
-    # Stage 6 ── Summary
+    # Stage 8 ── Summary
     print_run_summary(run_id, assets, content, render_result)
 
     logger.info("═══ Pipeline complete (run_id=%s) ═══", run_id)
