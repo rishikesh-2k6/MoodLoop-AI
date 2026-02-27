@@ -214,6 +214,7 @@ def step_generate_content(
 
 
 def step_refine_assets(
+    run_id: str,
     assets: SelectedAssets,
     content: GeneratedContent,
     args: argparse.Namespace,
@@ -247,19 +248,28 @@ def step_refine_assets(
     quote = content.quote
     logger.info("[Step 4] Asking Gemini to pick the best assets for quote: %r", quote)
 
-    # ── Best background image ────────────────────────────────────────
-    try:
-        image_candidates = [
-            p for p in BACKGROUNDS_DIR.iterdir()
-            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-        ]
-        if image_candidates:
-            best_bg = engine.pick_best_image(quote, mood, image_candidates)
-            if best_bg and best_bg != assets.background_path:
-                logger.info("[Step 4] Gemini picked image: %s", best_bg.name)
-                assets.background_path = best_bg
-    except Exception as exc:
-        logger.warning("[Step 4] Image selection failed: %s", exc)
+    # Try generating a new image first
+    generated_image_path = OUTPUT_DIR / f"{run_id}_bg.png"
+    logger.info("[Step 4] Attempting to generate completely new cinematic image using HuggingFace SDXL...")
+    generation_success = engine.generate_image(quote, mood, generated_image_path)
+    
+    if generation_success and generated_image_path.exists():
+        logger.info("[Step 4] Successfully generated bespoke AI background image.")
+        assets.background_path = generated_image_path
+    else:
+        logger.warning("[Step 4] Image generation failed or was empty. Falling back to local library images...")
+        try:
+            image_candidates = [
+                p for p in BACKGROUNDS_DIR.iterdir()
+                if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+            ]
+            if image_candidates:
+                best_bg = engine.pick_best_image(quote, mood, image_candidates)
+                if best_bg and best_bg != assets.background_path:
+                    logger.info("[Step 4] Gemini picked image from library: %s", best_bg.name)
+                    assets.background_path = best_bg
+        except Exception as exc:
+            logger.warning("[Step 4] Library image selection failed: %s", exc)
 
     # ── Best font ────────────────────────────────────────────────────
     if not args.font_path:  # only if user hasn't forced a font via CLI
@@ -626,7 +636,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     content = step_generate_content(assets, args)
 
     # Stage 4 ── AI asset refinement (Gemini picks best image/font/music)
-    assets = step_refine_assets(assets, content, args)
+    assets = step_refine_assets(run_id, assets, content, args)
 
     # Stage 5 ── AI Peer-Review (Improvise text to perfectly fit assets)
     content = step_peer_review(assets, content, args)
