@@ -241,28 +241,18 @@ def step_refine_assets(
     quote = content.quote
     logger.info("[Step 4] Asking Gemini to pick the best assets for quote: %r", quote)
 
-    # Try generating a new image first
-    generated_image_path = OUTPUT_DIR / f"{run_id}_bg.png"
-    logger.info("[Step 4] Attempting to generate completely new cinematic image using HuggingFace SDXL...")
-    generation_success = engine.generate_image(quote, mood, generated_image_path)
-    
-    if generation_success and generated_image_path.exists():
-        logger.info("[Step 4] Successfully generated bespoke AI background image.")
-        assets.background_path = generated_image_path
-    else:
-        logger.warning("[Step 4] Image generation failed or was empty. Falling back to local library images...")
-        try:
-            image_candidates = [
-                p for p in BACKGROUNDS_DIR.iterdir()
-                if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-            ]
-            if image_candidates:
-                best_bg = engine.pick_best_image(quote, mood, image_candidates)
-                if best_bg and best_bg != assets.background_path:
-                    logger.info("[Step 4] Gemini picked image from library: %s", best_bg.name)
-                    assets.background_path = best_bg
-        except Exception as exc:
-            logger.warning("[Step 4] Library image selection failed: %s", exc)
+    try:
+        image_candidates = [
+            p for p in BACKGROUNDS_DIR.iterdir()
+            if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        ]
+        if image_candidates:
+            best_bg = engine.pick_best_image(quote, mood, image_candidates)
+            if best_bg and best_bg != assets.background_path:
+                logger.info("[Step 4] Picked image from library: %s", best_bg.name)
+                assets.background_path = best_bg
+    except Exception as exc:
+        logger.warning("[Step 4] Library image selection failed: %s", exc)
 
     # ── Best font ────────────────────────────────────────────────────
     if not args.font_path:  # only if user hasn't forced a font via CLI
@@ -469,13 +459,8 @@ def step_log_upload_info(
     if render_result is not None and render_result.success:
         video_name = render_result.output_path.name
     else:
-        # Fall back to run_id-based filename if video was not rendered via this session but might exist
-        candidate = OUTPUT_DIR / f"{run_id}.mp4"
-        if candidate.exists():
-            video_name = candidate.name
-        else:
-            logger.info("[Step 5] Skipping CSV logging because no video was rendered.")
-            return
+        # Fall back to run_id-based filename even if skipped, to ensure data is logged
+        video_name = f"{run_id}.mp4"
 
     logger.info("[Step 5] Logging upload info to %s…", UPLOAD_CSV)
 

@@ -292,90 +292,6 @@ Write as if the person reading it is alone at 1:37 AM.
     #  Public — vision / asset selection                                  #
     # ------------------------------------------------------------------ #
 
-    def generate_image(self, quote: str, mood: str, output_path: Path) -> bool:
-        """
-        Generates a cinematic dark aesthetic image using HuggingFace InferenceClient.
-        Saves the image to output_path and returns True if successful, False otherwise.
-        """
-        token = os.environ.get("HF_TOKEN") or self.hf_api_key
-        if not token:
-            logger.warning("generate_image: HF_TOKEN or HF_API_KEY not set. Cannot generate image.")
-            return False
-
-        try:
-            from huggingface_hub import InferenceClient
-            
-            # Using the exact configuration requested by the user
-            client = InferenceClient(
-                provider="nscale",
-                api_key=token,
-            )
-            
-            prompt = f"""Create a cinematic dark aesthetic photograph.
-
-Scene:
-A scene that captures this exact mood: {mood} and reflects the feeling of this quote: "{quote}".
-
-Style:
-- Moody
-- Minimal
-- Emotional
-- Late-night atmosphere
-- Realistic photography
-- Soft shadows
-- Deep contrast
-- Slight film grain
-- Subtle depth of field
-- No fantasy elements
-- No anime style
-- No exaggerated colors
-
-Lighting:
-- Low light
-- Streetlight glow OR moonlight OR warm lamp light
-- Cool blue tones mixed with warm orange highlights
-- Soft reflections if wet surfaces exist
-
-Composition:
-- Vertical 9:16 aspect ratio
-- High resolution
-- Subject centered or slightly off-center
-- Empty space in middle for text overlay
-- Clean framing
-- No text
-- No watermark
-- No logos
-
-Color palette:
-- Deep blue
-- Dark purple
-- Black
-- Warm dim orange highlights
-
-Mood:
-Quiet, reflective, isolated, calm.
-
-Make it look like a professional cinematic photograph shot on a full-frame camera."""
-
-            logger.info("GeminiEngine: Requesting FLUX.1 image generation via HuggingFace (provider=nscale)...")
-            
-            image = client.text_to_image(
-                prompt,
-                model="black-forest-labs/FLUX.1-schnell",
-            )
-            
-            # Save the PIL Image to the requested path
-            image.save(output_path)
-            logger.info("GeminiEngine: Successfully generated image to %s", output_path.name)
-            return True
-            
-        except ImportError:
-            logger.error("generate_image: huggingface_hub not installed.")
-            return False
-        except Exception as exc:
-            logger.error("generate_image: Failed to generate image: %s", exc)
-            return False
-
     def pick_best_image(
         self,
         quote: str,
@@ -418,7 +334,7 @@ Make it look like a professional cinematic photograph shot on a full-frame camer
 
         # Heuristic fallback: score by filename keyword overlap with mood words
         result = self._heuristic_pick(image_paths, mood + " " + quote)
-        logger.info("pick_best_image: heuristic selected '%s'", result.name)
+        logger.info("pick_best_image: fallback heuristic selected '%s'", result.name)
         return result
 
     def pick_best_font(
@@ -874,13 +790,27 @@ Make it look like a professional cinematic photograph shot on a full-frame camer
     #  Private — heuristic fallbacks                                      #
     # ------------------------------------------------------------------ #
 
-    def _heuristic_pick(self, paths: list[Path], context: str) -> Path:
-        """Score paths by how many context words appear in the filename."""
-        words = {w.lower() for w in context.split() if len(w) > 3}
-        scored = []
+    def _heuristic_pick(self, paths: list[Path], search_text: str) -> Path:
+        """
+        Score paths by how many keywords in the filename match the text.
+        If no meaningful match is found, picks a random path to avoid repetitiveness.
+        """
+        import string
+        import random
+        clean_text = search_text.translate(str.maketrans('', '', string.punctuation)).lower()
+        search_words = set(clean_text.split())
+
+        scores = {}
         for p in paths:
-            name = p.stem.lower()
-            score = sum(1 for w in words if w in name)
-            scored.append((score, p))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[0][1] if scored else paths[0]
+            clean_name = p.stem.translate(str.maketrans('-', ' ')).lower()
+            name_words = set(clean_name.split())
+            scores[p] = len(search_words.intersection(name_words))
+
+        best_score = max(scores.values()) if scores else 0
+        
+        # If no filename words matched at all, just pick a random one
+        if best_score == 0:
+            return random.choice(paths)
+            
+        best = max(scores, key=scores.get)
+        return best
