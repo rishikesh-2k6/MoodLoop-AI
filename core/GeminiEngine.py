@@ -126,109 +126,110 @@ class GeminiEngine:
     # ------------------------------------------------------------------ #
 
     def generate_all(self, theme_name: str, mood: str) -> GeneratedContent:
-        """Generate quote, title, and caption with fallback chain."""
+        """Generate quote, title, caption, and hashtags in one single JSON shot."""
         logger.info("GeminiEngine: generating content — theme=%r mood=%r", theme_name, mood)
-        quote = self.generate_quote(theme_name, mood)
-        title = self.generate_title(theme_name, quote)
-        caption = self.generate_caption(theme_name, quote, title)
-        _, backend = self._generate_with_fallback("ping", label="ping", _dry=True)
-        logger.info("GeminiEngine: generation complete via backend=%s", backend)
-        return GeneratedContent(
-            quote=quote, title=title, caption=caption,
-            theme_name=theme_name, model=backend,
-        )
+        
+        prompt = f"""You are a dark aesthetic quote writer.
+Write emotionally intelligent short-form quotes for a late-night Gen Z audience.
 
-    def improvise_output(
-        self,
-        content: GeneratedContent,
-        image_name: str,
-        font_name: str,
-        music_name: str,
-    ) -> GeneratedContent:
-        """
-        AI Peer-Review: Sends the initial quote and chosen assets back to the AI
-        to see if the text can be improved or "remixed" to fit the actual visuals and audio better.
-        """
-        prompt = (
-            f"You are a peer-reviewing AI Director.\n"
-            f"We generated a draft quote: \"{content.quote}\"\n"
-            f"For visual context, we selected this background image: {image_name}\n"
-            f"We selected this font: {font_name}\n"
-            f"And this music track: {music_name}\n\n"
-            "Task: Improve the quote so it perfectly matches the vibe of the chosen image and music.\n"
-            "If the original is already perfect, you can return it. Otherwise, write a punchier, "
-            "more emotionally resonant 1-sentence hook.\n\n"
-            "Output ONLY the final quote. No quotes or introductory text."
-        )
-        logger.info("GeminiEngine: Beginning AI peer-review and improvisation…")
-        try:
-            new_quote, backend = self._generate_with_fallback(prompt, label="improvise")
-            new_quote = new_quote.strip().strip('"').strip("'").splitlines()[0].strip()
-            if new_quote.lower() != content.quote.lower():
-                logger.info("Peer-Review upgraded quote from '%s' to '%s'", content.quote, new_quote)
-                content.quote = new_quote
-                # If quote changed, title and caption need slight tweaks to match
-                content.title = self.generate_title(content.theme_name, new_quote)
-                content.caption = self.generate_caption(content.theme_name, new_quote, content.title)
-                content.model = f"peer-reviewed by {backend}"
+Context:
+The visual background is cinematic, dark, moody, urban, and reflective.
+
+Tone Rules:
+- Minimal
+- Subtle
+- Deep but simple
+- Slightly melancholic but calm
+- Mature Gen Z voice
+- No cringe
+- No clichés
+- No motivational clichés
+- No toxic lines
+- No exaggerated romance
+- No emojis
+
+Style Format:
+Generate ONE of the following structures randomly:
+
+1) Single strong one-line quote
+OR
+2) 3–4 micro lines (very short lines stacked)
+
+Writing Constraints:
+- Keep it under 25 words total
+- Use natural language
+- Avoid complex vocabulary
+- Must feel personal and relatable
+- Loop-friendly ending (can feel open-ended)
+
+Theme: {theme_name}
+Mood: {mood}
+
+Return output in this EXACT JSON format:
+{{
+  "quote": "",
+  "title": "",
+  "caption": "",
+  "hashtags": []
+}}
+
+Title:
+- 2–4 words max
+- Lowercase preferred
+
+Caption:
+- 1–2 short lines
+- Expand the emotion slightly
+- Still minimal
+
+Hashtags:
+- 12–15 tags
+- Relevant to theme
+- Lowercase
+- No spammy tags
+Write as if the person reading it is alone at 1:37 AM.
+"""
+        import json
+        import re
+        
+        # We try to get the JSON back
+        for attempt in range(2):
+            text, backend = self._generate_with_fallback(prompt, label="content_json")
+            
+            # Use regex to find the outermost JSON object
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if match:
+                clean_text = match.group(0)
             else:
-                logger.info("Peer-Review approved original quote without changes.")
-        except Exception as exc:
-            logger.warning("Peer-Review failed (%s). Keeping original content.", exc)
-
-        return content
-
-    def generate_quote(self, theme_name: str, mood: str) -> str:
-        """
-        Generate one short, punchy hook quote.
-
-        Designed to be immediately understandable — no abstract
-        metaphors, no clichés.  One clear, emotionally resonant
-        sentence that people stop scrolling for.
-        """
-        prompt = (
-            f"You write viral one-line quotes for short-form videos.\n"
-            f"Theme: {theme_name}. Mood: {mood}.\n\n"
-            "Write ONE quote that:\n"
-            "- Is a SINGLE sentence (max 12 words)\n"
-            "- Is instantly understandable — no complex metaphors\n"
-            "- Hits an emotion hard (relatable, raw, or surprising)\n"
-            "- Sounds like something a real person would say or think\n"
-            "- Has no quotation marks, hashtags, or emojis\n\n"
-            "Output ONLY the quote. Nothing else."
+                clean_text = text
+            
+            try:
+                data = json.loads(clean_text)
+                quote = data.get("quote", "").strip()
+                title = data.get("title", "").strip()
+                caption = data.get("caption", "").strip()
+                hashtags = data.get("hashtags", [])
+                
+                # Format hashtags back into the caption for the rest of the pipeline
+                tag_str = " ".join([h if h.startswith("#") else f"#{h}" for h in hashtags])
+                full_caption = f"{caption}\n\n{tag_str}".strip()
+                
+                logger.info("GeminiEngine: generation complete via backend=%s", backend)
+                return GeneratedContent(
+                    quote=quote, title=title, caption=full_caption,
+                    theme_name=theme_name, model=backend,
+                )
+            except json.JSONDecodeError as exc:
+                logger.warning("Failed to parse JSON on attempt %d: %s \nRaw: %r", attempt + 1, exc, text)
+        
+        # Fallback if both JSON attempts fail entirely
+        logger.error("JSON parsing failed twice. Returning fallback content.")
+        return GeneratedContent(
+            quote="In the quietest moments, the loudest truths are heard.",
+            title="late nights",
+            caption="sometimes silence says everything.\n#latenight #thoughts",
+            theme_name=theme_name, model="fallback",
         )
-        text, _ = self._generate_with_fallback(prompt, label="quote")
-        # Clean up any stray quotes/newlines
-        return text.strip().strip('"').strip("'").splitlines()[0].strip()
-
-    def generate_title(self, theme_name: str, quote: str) -> str:
-        """Generate a short, clickable video title (≤ 50 chars)."""
-        prompt = (
-            f"Create a YouTube Shorts / Instagram Reels title.\n"
-            f"Theme: {theme_name}\nQuote: {quote}\n\n"
-            "Rules:\n"
-            "- Under 50 characters\n"
-            "- Creates curiosity or emotional pull\n"
-            "- Plain words — no hashtags, no emojis\n\n"
-            "Output ONLY the title."
-        )
-        text, _ = self._generate_with_fallback(prompt, label="title")
-        return text.strip().strip('"').splitlines()[0].strip()[:60]
-
-    def generate_caption(self, theme_name: str, quote: str, title: str) -> str:
-        """Generate a social media caption with hashtags."""
-        prompt = (
-            f"Write an Instagram/YouTube Shorts caption.\n"
-            f"Theme: {theme_name}\nTitle: {title}\nQuote: {quote}\n\n"
-            "Format:\n"
-            "- 1 hook line (no emoji)\n"
-            "- 2–3 lines deepening the mood\n"
-            "- 10–15 relevant hashtags on the last line\n"
-            "- Max 2 emojis total\n\n"
-            "Output ONLY the caption text."
-        )
-        text, _ = self._generate_with_fallback(prompt, label="caption")
-        return text.strip()
 
     # ------------------------------------------------------------------ #
     #  Public — vision / asset selection                                  #
