@@ -129,38 +129,52 @@ class GeminiEngine:
         """Generate quote, title, caption, and hashtags in one single JSON shot."""
         logger.info("GeminiEngine: generating content — theme=%r mood=%r", theme_name, mood)
         
-        prompt = f"""You are a dark aesthetic quote writer.
-Write emotionally intelligent short-form quotes for a late-night Gen Z audience.
+        prompt = f"""You are a writer who specializes in dark aesthetic, emotionally intelligent short-form quotes.
+
+Your audience:
+Young adults who read quietly at night.
+They prefer depth over drama.
+They dislike clichés and exaggerated motivation.
 
 Context:
-The visual background is cinematic, dark, moody, urban, and reflective.
+The visual background is cinematic, dark, moody, urban, and minimal.
+The viewer is likely alone, reflecting.
 
-Tone Rules:
-- Minimal
+Writing Tone:
+- Calm
 - Subtle
 - Deep but simple
-- Slightly melancholic but calm
 - Mature Gen Z voice
+- Emotionally aware
+- Slightly melancholic but not hopeless
 - No cringe
-- No clichés
-- No motivational clichés
 - No toxic lines
 - No exaggerated romance
+- No dramatic motivational tone
 - No emojis
 
-Style Format:
-Generate ONE of the following structures randomly:
+Output Rules:
+- Either:
+    A) One strong line
+    OR
+    B) 3–4 short micro lines stacked
+- Each line should be short and clean
+- Use natural conversational language
+- Avoid heavy vocabulary
+- Avoid common quote clichés
+- Avoid phrases like:
+    “everything happens for a reason”
+    “trust the process”
+    “you deserve better”
+    “love yourself first”
 
-1) Single strong one-line quote
-OR
-2) 3–4 micro lines (very short lines stacked)
+Emotional Requirement:
+The quote should feel like something someone would whisper to themselves at 1:37 AM.
+It must feel personal, not generic.
 
-Writing Constraints:
-- Keep it under 25 words total
-- Use natural language
-- Avoid complex vocabulary
-- Must feel personal and relatable
-- Loop-friendly ending (can feel open-ended)
+Loop Design:
+If possible, make the ending slightly open or cyclical so it feels reflective when replayed.
+Write as if the person reading this feels misunderstood but does not want attention.
 
 Theme: {theme_name}
 Mood: {mood}

@@ -60,8 +60,8 @@ from core.TrendAnalyzer import TrendAnalyzer
 from core.ThemeSelector import ThemeSelector, SelectedAssets
 from core.GeminiEngine import GeminiEngine, GeneratedContent
 from core.LLMEngine import GeneratedContent  # type: ignore[no-redef, assignment]
+from core.LLMEngine import GeneratedContent  # type: ignore[no-redef, assignment]
 from core.VideoRenderer import VideoRenderer, RenderResult
-import generate_upload_csv
 
 # ------------------------------------------------------------------ #
 #  Logging configuration                                               #
@@ -88,21 +88,14 @@ ASSETS_DIR = ROOT / "assets"
 BACKGROUNDS_DIR = ASSETS_DIR / "backgrounds"
 MUSIC_DIR = ASSETS_DIR / "music"
 OUTPUT_DIR = ROOT / "output"
-METADATA_CSV = ROOT / "metadata.csv"
+UPLOAD_CSV = ROOT / "upload_info.csv"
 
 CSV_FIELDNAMES: list[str] = [
-    "run_id",
-    "timestamp",
-    "theme_name",
-    "mood",
-    "quote",
+    "video_name",
     "title",
+    "description",
     "caption",
-    "background_file",
-    "music_file",
-    "video_output",
-    "model",
-    "trending_topics",
+    "hashtags",
 ]
 
 
@@ -453,61 +446,73 @@ def step_validate_frame(
         logger.warning("[Step 6] Frame validation skipped: %s", exc)
 
 
-def step_log_metadata(
+def step_log_upload_info(
     run_id: str,
-    assets: SelectedAssets,
     content: GeneratedContent,
-    trending_topics: list[str],
     render_result: Optional["RenderResult"] = None,
 ) -> None:
     """
-    Step 5 — Append a metadata row to the CSV log.
+    Step 5 — Append a formatted row to upload_info.csv.
 
     Parameters
     ----------
     run_id : str
-        Unique identifier for this pipeline run (timestamp-based).
-    assets : SelectedAssets
-        Resolved theme and file references.
+        Unique identifier for this pipeline run.
     content : GeneratedContent
         LLM-generated text fields.
-    trending_topics : list[str]
-        Raw trending topics list from step 1.
     render_result : RenderResult | None
         Optional render result; output path recorded when present.
     """
-    logger.info("[Step 5] Logging metadata to %s…", METADATA_CSV)
+    write_header = not UPLOAD_CSV.exists()
 
-    write_header = not METADATA_CSV.exists()
-
-    video_out = ""
+    video_name = ""
     if render_result is not None and render_result.success:
-        video_out = str(render_result.output_path)
+        video_name = render_result.output_path.name
+    else:
+        # Fall back to run_id-based filename if video was not rendered via this session but might exist
+        candidate = OUTPUT_DIR / f"{run_id}.mp4"
+        if candidate.exists():
+            video_name = candidate.name
+        else:
+            logger.info("[Step 5] Skipping CSV logging because no video was rendered.")
+            return
+
+    logger.info("[Step 5] Logging upload info to %s…", UPLOAD_CSV)
+
+    raw_caption = content.caption.strip()
+    
+    # Split raw_caption into text and hashtags
+    parts = raw_caption.split("\n\n")
+    if len(parts) > 1 and "#" in parts[-1]:
+        description = "\n\n".join(parts[:-1]).strip()
+        hashtags = parts[-1].strip()
+    else:
+        import re
+        hash_matches = re.findall(r'#\w+', raw_caption)
+        if hash_matches:
+            hashtags = " ".join(hash_matches)
+            description = re.sub(r'#\w+', '', raw_caption).strip()
+        else:
+            description = raw_caption
+            hashtags = ""
 
     row: dict[str, str | None] = {
-        "run_id": run_id,
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "theme_name": assets.theme.name,
-        "mood": assets.theme.mood,
-        "quote": content.quote,
-        "title": content.title,
-        "caption": content.caption,
-        "background_file": str(assets.background_path) if assets.background_path else "",
-        "music_file": str(assets.music_path) if assets.music_path else "",
-        "video_output": video_out,
-        "model": content.model,
-        "trending_topics": "; ".join(trending_topics[:5]),
+        "video_name": video_name,
+        "title": content.title.strip('"').strip("'").strip(),
+        "description": description,
+        "caption": content.quote.strip('"').strip("'").strip(),
+        "hashtags": hashtags,
     }
 
     try:
-        with METADATA_CSV.open("a", newline="", encoding="utf-8") as fh:
+        with UPLOAD_CSV.open("a", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(fh, fieldnames=CSV_FIELDNAMES)
             if write_header:
                 writer.writeheader()
             writer.writerow(row)
-        logger.info("[Step 5] Metadata row written (run_id=%s).", run_id)
+        logger.info("[Step 5] Upload info row written for %s.", video_name)
     except OSError as exc:
-        logger.error("[Step 5] Failed to write metadata CSV: %s", exc)
+        logger.error("[Step 5] Failed to write upload_info CSV: %s", exc)
 
 
 # ------------------------------------------------------------------ #
@@ -647,18 +652,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
     # Stage 7 ── Gemini Vision frame validation
     step_validate_frame(render_result, content, args)
 
-    # Stage 8 ── Metadata logging
-    step_log_metadata(run_id, assets, content, trending_topics, render_result)
+    # Stage 8 ── Upload Info logging
+    step_log_upload_info(run_id, content, render_result)
 
     # Stage 9 ── Summary
     print_run_summary(run_id, assets, content, render_result)
-
-    # Stage 10 ── Generate upload_info.csv
-    try:
-        logger.info("Generating upload_info.csv...")
-        generate_upload_csv.generate()
-    except Exception as exc:
-        logger.warning("Failed to generate upload_info.csv: %s", exc)
 
     logger.info("═══ Pipeline complete (run_id=%s) ═══", run_id)
 
